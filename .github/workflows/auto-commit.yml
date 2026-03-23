@@ -1,0 +1,180 @@
+name: Auto Commit and Push
+
+on:
+  # 手动触发
+  workflow_dispatch:
+    inputs:
+      commit_message:
+        description: 'Commit message'
+        required: true
+        default: 'Auto commit: CI/CD pipeline update'
+  
+  # 定时触发：每小时检查一次
+  schedule:
+    - cron: '0 * * * *'
+  
+  # 当代码变更时触发
+  push:
+    branches-ignore:
+      - 'main'
+      - 'develop'
+
+env:
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+jobs:
+  auto-commit:
+    name: Auto Commit Changes
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+      with:
+        token: ${{ env.GITHUB_TOKEN }}
+        fetch-depth: 0
+        
+    - name: Configure Git
+      run: |
+        git config --global user.name "GitHub Actions Bot"
+        git config --global user.email "actions@github.com"
+        git config --global pull.rebase false
+        
+    - name: Check for changes
+      id: check_changes
+      run: |
+        git status --porcelain
+        if [ -n "$(git status --porcelain)" ]; then
+          echo "has_changes=true" >> $GITHUB_OUTPUT
+          echo "Changes detected"
+        else
+          echo "has_changes=false" >> $GITHUB_OUTPUT
+          echo "No changes detected"
+        fi
+        
+    - name: Commit and push changes
+      if: steps.check_changes.outputs.has_changes == 'true'
+      run: |
+        # 添加所有变更
+        git add .
+        
+        # 生成提交信息
+        COMMIT_MESSAGE="Auto commit: $(date '+%Y-%m-%d %H:%M:%S')
+        
+        Changes detected by GitHub Actions:
+        $(git status --porcelain | sed 's/^/  - /')
+        
+        Workflow: ${{ github.workflow }}
+        Run ID: ${{ github.run_id }}
+        Trigger: ${{ github.event_name }}"
+        
+        # 提交变更
+        git commit -m "$COMMIT_MESSAGE"
+        
+        # 推送到当前分支
+        git push origin HEAD:${{ github.ref }}
+        
+        echo "✅ Changes committed and pushed successfully"
+        
+    - name: No changes notification
+      if: steps.check_changes.outputs.has_changes == 'false'
+      run: |
+        echo "✅ No changes to commit"
+        
+  sync-to-main:
+    name: Sync to Main Branch
+    runs-on: ubuntu-latest
+    needs: auto-commit
+    if: github.ref != 'refs/heads/main' && github.event_name == 'workflow_dispatch'
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+      with:
+        token: ${{ env.GITHUB_TOKEN }}
+        fetch-depth: 0
+        
+    - name: Configure Git
+      run: |
+        git config --global user.name "GitHub Actions Bot"
+        git config --global user.email "actions@github.com"
+        
+    - name: Sync to main branch
+      run: |
+        # 切换到main分支
+        git checkout main
+        
+        # 拉取最新代码
+        git pull origin main
+        
+        # 合并当前分支的变更
+        git merge ${{ github.ref }} --no-ff -m "Merge ${{ github.ref }} into main"
+        
+        # 推送到main分支
+        git push origin main
+        
+        echo "✅ Successfully synced to main branch"
+        
+  create-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: sync-to-main
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+      with:
+        token: ${{ env.GITHUB_TOKEN }}
+        
+    - name: Get version from package.json
+      id: get_version
+      run: |
+        VERSION=$(node -p "require('./package.json').version" 2>/dev/null || echo "1.0.0")
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: v${{ steps.get_version.outputs.version }}
+        name: CIS System v${{ steps.get_version.outputs.version }}
+        body: |
+          # CIS System Release v${{ steps.get_version.outputs.version }}
+          
+          ## Changes
+          - Automated release created by GitHub Actions
+          - Includes all changes up to $(date '+%Y-%m-%d %H:%M:%S')
+          
+          ## Build Information
+          - Workflow: ${{ github.workflow }}
+          - Run ID: ${{ github.run_id }}
+          - Commit: ${{ github.sha }}
+          
+          ## Next Steps
+          1. Deploy to production environment
+          2. Run integration tests
+          3. Update documentation
+        draft: false
+        prerelease: false
+        generate_release_notes: true
+        
+  notify-completion:
+    name: Notify Completion
+    runs-on: ubuntu-latest
+    needs: [auto-commit, sync-to-main, create-release]
+    if: always()
+    
+    steps:
+    - name: Send completion notification
+      run: |
+        echo "Auto Commit Workflow Completed"
+        echo "Status: ${{ job.status }}"
+        echo "Workflow: ${{ github.workflow }}"
+        echo "Run ID: ${{ github.run_id }}"
+        
+        # 这里可以添加Slack、Email等通知
+        if [ "${{ job.status }}" = "success" ]; then
+          echo "✅ Workflow completed successfully"
+        else
+          echo "❌ Workflow failed"
+        fi
