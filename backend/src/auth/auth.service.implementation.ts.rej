@@ -1,0 +1,35 @@
+@@ -33,11 +33,11 @@
+     try {
+       // 创建用户实体
+       const user = this.userRepository.create({
+-        ...registerUserDto,
+-        password: hashedPassword,
+-        status: 'active' as UserStatus,
++        email: registerUserDto.email,
++        username: registerUserDto.username,
++        password: hashedPassword,
++        status: UserStatus.ACTIVE,
+       });
+-
+       const savedUser = await this.userRepository.save(user);
+ 
+       // 移除密码字段返回
+@@ -57,7 +57,7 @@
+     try {
+       const user = await this.userRepository.findOne({
+         where: { email: loginUserDto.email },
+-        select: ['id', 'email', 'username', 'password', 'role', 'status'],
++        select: ['id', 'email', 'username', 'password', 'role', 'status', 'fullName'],
+       });
+ 
+       if (!user) {
+@@ -131,7 +132,8 @@
+       const newPayload: JwtPayload = {
+         sub: payload.sub,
+         email: payload.email,
+-        role: payload.role,
++        username: payload.username,
++        role: payload.role as UserRole,
+       };
+ 
+       const newAccessToken = this.jwtService.sign(newPayload, {

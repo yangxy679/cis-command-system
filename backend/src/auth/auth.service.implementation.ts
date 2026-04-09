@@ -1,125 +1,151 @@
-import { Injectable, ConflictException, UnauthorizedException, NotFoundException } from '@nestjs/common';
+import { UpdateProfileDto } from './dto/update-profile.dto';
+import { ChangePasswordDto } from './dto/change-password.dto';
+import { Injectable, UnauthorizedException, ConflictException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import * as bcrypt from 'bcrypt';
 import { JwtService } from '@nestjs/jwt';
-import { User } from './entities/user.entity';
-import { CreateUserDto } from './dto/create-user.dto';
+import * as bcrypt from 'bcrypt';
+
+import { AuthService } from './auth.service';
+import { User, UserStatus, UserRole } from './entities/user.entity';
+import { RegisterUserDto } from './dto/register-user.dto';
 import { LoginUserDto } from './dto/login-user.dto';
-import { JwtPayload } from './interfaces/jwt-payload.interface';
+import { JwtPayload, TokenResponse } from './interfaces/jwt-payload.interface';
 
 @Injectable()
-export class AuthService {
+export class AuthServiceImplementation implements AuthService {
   constructor(
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
     private readonly jwtService: JwtService,
   ) {}
 
-  /**
-   * 用户注册
-   */
-  async register(createUserDto: CreateUserDto): Promise<{ user: User; accessToken: string; refreshToken: string }> {
-    // 检查用户是否已存在
+  async register(registerUserDto: RegisterUserDto): Promise<any> {
+    // 检查邮箱是否已存在
     const existingUser = await this.userRepository.findOne({
-      where: { email: createUserDto.email },
+      where: { email: registerUserDto.email },
     });
 
     if (existingUser) {
-      throw new ConflictException('用户已存在');
+      throw new ConflictException('邮箱已被注册');
+    }
+
+    // 检查用户名是否已存在
+    const existingUsername = await this.userRepository.findOne({
+      where: { username: registerUserDto.username },
+    });
+
+    if (existingUsername) {
+      throw new ConflictException('用户名已被使用');
     }
 
     // 哈希密码
-    const hashedPassword = await bcrypt.hash(createUserDto.password, 10);
+    const hashedPassword = await bcrypt.hash(registerUserDto.password, 10);
 
-    // 创建用户
-    const user = this.userRepository.create({
-      ...createUserDto,
-      password: hashedPassword,
-      status: 'active',
-      lastLoginAt: null,
-    });
+    try {
+      // 创建用户实体
+      const user = this.userRepository.create({
+        email: registerUserDto.email,
+        username: registerUserDto.username,
+        password: hashedPassword,
+        status: UserStatus.ACTIVE,
+        fullName: registerUserDto.fullName || '',
+        phone: registerUserDto.phone || '',
+      });
 
-    await this.userRepository.save(user);
+      const savedUser = await this.userRepository.save(user);
 
-    // 生成令牌
-    const tokens = await this.generateTokens(user);
-
-    return {
-      user: this.sanitizeUser(user),
-      ...tokens,
-    };
+      // 移除密码字段返回
+      const { password, ...userWithoutPassword } = savedUser;
+      return userWithoutPassword;
+    } catch (error) {
+      throw new BadRequestException('注册失败: ' + error.message);
+    }
   }
 
-  /**
-   * 用户登录
-   */
-  async login(loginUserDto: LoginUserDto): Promise<{ user: User; accessToken: string; refreshToken: string }> {
-    // 查找用户
-    const user = await this.userRepository.findOne({
-      where: { email: loginUserDto.email },
-    });
+  async login(loginUserDto: LoginUserDto): Promise<any> {
+    try {
+      const user = await this.userRepository.findOne({
+        where: { email: loginUserDto.email },
+        select: ['id', 'email', 'username', 'password', 'role', 'status', 'fullName'],
+      });
 
-    if (!user) {
-      throw new UnauthorizedException('用户名或密码错误');
+      if (!user) {
+        throw new UnauthorizedException('用户不存在');
+      }
+
+      // 验证密码
+      const isPasswordValid = await bcrypt.compare(
+        loginUserDto.password,
+        user.password,
+      );
+
+      if (!isPasswordValid) {
+        throw new UnauthorizedException('密码错误');
+      }
+
+      // 检查用户状态
+      if (user.status !== UserStatus.ACTIVE) {
+        throw new UnauthorizedException('账户已被禁用');
+      }
+
+      // 生成JWT令牌
+      const tokens = await this.generateTokens(user);
+
+      // 更新最后登录时间
+      await this.userRepository.update(user.id, {
+        lastLoginAt: new Date(),
+      });
+
+      // 移除密码字段返回
+      const { password, ...userWithoutPassword } = user;
+      return {
+        user: userWithoutPassword,
+        tokens,
+      };
+    } catch (error) {
+      if (error instanceof UnauthorizedException) {
+        throw error;
+      }
+      throw new UnauthorizedException('登录失败: ' + error.message);
     }
-
-    // 验证密码
-    const isPasswordValid = await bcrypt.compare(loginUserDto.password, user.password);
-
-    if (!isPasswordValid) {
-      throw new UnauthorizedException('用户名或密码错误');
-    }
-
-    // 检查用户状态
-    if (user.status !== 'active') {
-      throw new UnauthorizedException('用户账户已被禁用');
-    }
-
-    // 更新最后登录时间
-    user.lastLoginAt = new Date();
-    await this.userRepository.save(user);
-
-    // 生成令牌
-    const tokens = await this.generateTokens(user);
-
-    return {
-      user: this.sanitizeUser(user),
-      ...tokens,
-    };
   }
 
-  /**
-   * 生成访问令牌和刷新令牌
-   */
-  private async generateTokens(user: User): Promise<{ accessToken: string; refreshToken: string }> {
+  private async generateTokens(user: User): Promise<TokenResponse> {
     const payload: JwtPayload = {
       sub: user.id,
       email: user.email,
+      username: user.username,
       role: user.role,
     };
 
-    const accessToken = await this.jwtService.signAsync(payload, {
-      expiresIn: process.env.JWT_EXPIRATION || '7d',
+    const accessToken = this.jwtService.sign(payload, {
+      secret: process.env.JWT_SECRET || 'cis-secret-key',
+      expiresIn: process.env.JWT_EXPIRES_IN || '1h',
     });
 
-    const refreshToken = await this.jwtService.signAsync(
+    const refreshToken = this.jwtService.sign(
       { sub: user.id },
       {
-        expiresIn: process.env.REFRESH_TOKEN_EXPIRATION || '30d',
+        secret: process.env.JWT_REFRESH_SECRET || 'cis-refresh-secret-key',
+        expiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '7d',
       },
     );
 
-    return { accessToken, refreshToken };
+    return {
+      accessToken,
+      refreshToken,
+      tokenType: 'Bearer',
+      expiresIn: 3600, // 1小时
+    };
   }
 
-  /**
-   * 刷新访问令牌
-   */
-  async refreshToken(refreshToken: string): Promise<{ accessToken: string }> {
+  async refreshToken(refreshToken: string): Promise<TokenResponse> {
     try {
-      const payload = await this.jwtService.verifyAsync(refreshToken);
-      
+      const payload = this.jwtService.verify(refreshToken, {
+        secret: process.env.JWT_REFRESH_SECRET || 'cis-refresh-secret-key',
+      });
+
       const user = await this.userRepository.findOne({
         where: { id: payload.sub },
       });
@@ -131,58 +157,119 @@ export class AuthService {
       const newPayload: JwtPayload = {
         sub: user.id,
         email: user.email,
+        username: user.username,
         role: user.role,
       };
 
-      const accessToken = await this.jwtService.signAsync(newPayload, {
-        expiresIn: process.env.JWT_EXPIRATION || '7d',
+      const newAccessToken = this.jwtService.sign(newPayload, {
+        secret: process.env.JWT_SECRET || 'cis-secret-key',
+        expiresIn: process.env.JWT_EXPIRES_IN || '1h',
       });
 
-      return { accessToken };
+      return {
+        accessToken: newAccessToken,
+        refreshToken, // 返回原刷新令牌
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+      };
     } catch (error) {
       throw new UnauthorizedException('刷新令牌无效');
     }
   }
 
-  /**
-   * 获取用户信息
-   */
-  async getUserProfile(userId: string): Promise<User> {
+  async validateUser(payload: JwtPayload): Promise<any> {
     const user = await this.userRepository.findOne({
-      where: { id: userId },
+      where: { id: payload.sub },
     });
 
     if (!user) {
-      throw new NotFoundException('用户不存在');
+      throw new UnauthorizedException('用户不存在');
     }
 
-    return this.sanitizeUser(user);
+    const { password, ...userWithoutPassword } = user;
+    return userWithoutPassword;
   }
 
-  /**
-   * 更新用户信息
-   */
-  async updateUserProfile(userId: string, updateData: Partial<User>): Promise<User> {
-    const user = await this.userRepository.findOne({
-      where: { id: userId },
-    });
-
-    if (!user) {
-      throw new NotFoundException('用户不存在');
-    }
-
-    // 更新用户信息
-    Object.assign(user, updateData);
-    await this.userRepository.save(user);
-
-    return this.sanitizeUser(user);
-  }
-
-  /**
-   * 清理用户敏感信息
-   */
-  private sanitizeUser(user: User): User {
-    const { password, ...sanitizedUser } = user;
-    return sanitizedUser as User;
+  async logout(userId: string): Promise<void> {
+    // 在实际应用中，这里可以将令牌加入黑名单
+    // 目前只是记录日志
+    console.log(`用户 ${userId} 已登出`);
   }
 }
+
+  async getProfile(userId: string): Promise<any> {
+    const user = await this.userRepository.findOne({
+      where: { id: userId },
+    });
+
+    if (!user) {
+      throw new UnauthorizedException('用户不存在');
+    }
+
+    const { password, ...userWithoutPassword } = user;
+    return userWithoutPassword;
+  }
+
+  async updateProfile(userId: string, updateProfileDto: UpdateProfileDto): Promise<any> {
+    await this.userRepository.update(userId, updateProfileDto);
+    
+    const updatedUser = await this.userRepository.findOne({
+      where: { id: userId },
+    });
+
+    if (!updatedUser) {
+      throw new UnauthorizedException('用户不存在');
+    }
+
+    const { password, ...userWithoutPassword } = updatedUser;
+    return userWithoutPassword;
+  }
+
+  async changePassword(userId: string, changePasswordDto: ChangePasswordDto): Promise<any> {
+    const user = await this.userRepository.findOne({
+      where: { id: userId },
+      select: ['id', 'password'],
+    });
+
+    if (!user) {
+      throw new UnauthorizedException('用户不存在');
+    }
+
+    // 验证旧密码
+    const isOldPasswordValid = await bcrypt.compare(
+      changePasswordDto.oldPassword,
+      user.password,
+    );
+
+    if (!isOldPasswordValid) {
+      throw new UnauthorizedException('旧密码错误');
+    }
+
+    // 验证新密码和确认密码是否一致
+    if (changePasswordDto.newPassword !== changePasswordDto.confirmNewPassword) {
+      throw new BadRequestException('新密码和确认密码不一致');
+    }
+
+    // 哈希新密码
+    const hashedNewPassword = await bcrypt.hash(changePasswordDto.newPassword, 10);
+
+    // 更新密码
+    await this.userRepository.update(userId, {
+      password: hashedNewPassword,
+    });
+
+    return { message: '密码修改成功' };
+  }
+
+  async findById(userId: string): Promise<any> {
+    const user = await this.userRepository.findOne({
+      where: { id: userId },
+    });
+
+    if (!user) {
+      throw new UnauthorizedException('用户不存在');
+    }
+
+    const { password, ...userWithoutPassword } = user;
+    return userWithoutPassword;
+  }
