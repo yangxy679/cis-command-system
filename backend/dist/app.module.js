@@ -8,9 +8,13 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.AppModule = void 0;
 const common_1 = require("@nestjs/common");
-const typeorm_1 = require("@nestjs/typeorm");
 const config_1 = require("@nestjs/config");
+const typeorm_1 = require("@nestjs/typeorm");
 const auth_module_1 = require("./auth/auth.module");
+const users_module_1 = require("./users/users.module");
+const dashboard_module_1 = require("./dashboard/dashboard.module");
+const roles_module_1 = require("./roles/roles.module");
+const units_module_1 = require("./units/units.module");
 const database_config_1 = require("./config/database.config");
 let AppModule = class AppModule {
 };
@@ -20,10 +24,26 @@ exports.AppModule = AppModule = __decorate([
         imports: [
             config_1.ConfigModule.forRoot({
                 isGlobal: true,
-                envFilePath: '.env',
+                load: [database_config_1.default],
             }),
-            typeorm_1.TypeOrmModule.forRoot(database_config_1.default),
+            typeorm_1.TypeOrmModule.forRootAsync({
+                useFactory: () => ({
+                    type: 'postgres',
+                    host: process.env.DB_HOST || 'localhost',
+                    port: parseInt(process.env.DB_PORT || '5432'),
+                    username: process.env.DB_USERNAME || 'postgres',
+                    password: process.env.DB_PASSWORD || 'password',
+                    database: process.env.DB_DATABASE || 'cis_command_system',
+                    entities: [__dirname + '/**/*.entity{.ts,.js}'],
+                    synchronize: process.env.NODE_ENV !== 'production',
+                    logging: process.env.NODE_ENV !== 'production',
+                }),
+            }),
             auth_module_1.AuthModule,
+            users_module_1.UsersModule,
+            dashboard_module_1.DashboardModule,
+            roles_module_1.RolesModule,
+            units_module_1.UnitsModule,
         ],
         controllers: [],
         providers: [],

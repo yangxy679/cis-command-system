@@ -1,13 +1,34 @@
-import { UserRole, UserStatus } from '../../auth/entities/user.entity';
 export declare class UpdateUserDto {
-    email?: string;
-    password?: string;
     fullName?: string;
-    department?: string;
+    email?: string;
     rank?: string;
-    role?: UserRole;
-    status?: UserStatus;
-    phone?: string;
+    department?: string;
     position?: string;
-    notes?: string;
+    phone?: string;
+    isActive?: boolean;
+    preferences?: Record<string, any>;
+    roleIds?: string[];
+}
+export declare class UpdateUserProfileDto {
+    fullName?: string;
+    email?: string;
+    phone?: string;
+    preferences?: Record<string, any>;
+}
+export declare class ChangeUserStatusDto {
+    isActive: boolean;
+    reason?: string;
+}
+export declare class AssignRolesDto {
+    roleIds: string[];
+}
+export declare class UserQueryDto {
+    search?: string;
+    department?: string;
+    isActive?: boolean;
+    roleId?: string;
+    page?: number;
+    limit?: number;
+    sortBy?: string;
+    sortOrder?: 'ASC' | 'DESC';
 }

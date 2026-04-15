@@ -9,7 +9,7 @@ export declare class AuthController {
     constructor(authService: AuthService);
     register(createUserDto: CreateUserDto): Promise<any>;
     login(loginDto: LoginUserDto): Promise<any>;
-    refreshToken(refreshTokenDto: RefreshTokenDto): Promise<import("./interfaces/jwt-payload.interface").TokenResponse>;
+    refreshToken(refreshTokenDto: RefreshTokenDto): Promise<any>;
     getProfile(req: any): Promise<any>;
     updateProfile(req: any, updateProfileDto: UpdateProfileDto): Promise<any>;
     changePassword(req: any, changePasswordDto: ChangePasswordDto): Promise<any>;

@@ -4,6 +4,8 @@ import { useAuth } from '../contexts/AuthContext';
 import LoginPage from '../pages/auth/LoginPage';
 import RegisterPage from '../pages/auth/RegisterPage';
 import DashboardPage from '../pages/dashboard/DashboardPage';
+import UserListPage from '../components/users/UserListPage';
+import RoleListPage from '../components/roles/RoleListPage';
 import ProfilePage from '../pages/profile/ProfilePage';
 import AppLayout from '../components/layout/AppLayout';
 import LoadingSpinner from '../components/common/LoadingSpinner';
